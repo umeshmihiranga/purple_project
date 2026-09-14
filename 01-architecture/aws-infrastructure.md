@@ -1,21 +1,96 @@
+# BLACKFORGE
 
+> A hands-on Purple Team cybersecurity lab built in AWS to simulate real-world attacks, detect malicious activity, investigate telemetry, and apply defensive controls.
 
-````markdown
-# BLACKFORGE AWS Infrastructure
+---
 
-## Status
+## Overview
 
-**Phase:** Cloud Architecture  
-**Status:** Foundation complete  
-**Region:** AWS Asia Pacific (Singapore) — `ap-southeast-1`
+**BLACKFORGE** is an isolated cybersecurity laboratory designed to combine offensive security, defensive security, network engineering, and cloud infrastructure.
+
+The environment is deployed in **AWS Singapore (`ap-southeast-1`)** and uses a segmented network architecture consisting of:
+
+- A public-facing DMZ (Demilitarized Zone)
+- An isolated private application subnet
+- Nginx reverse proxy
+- ModSecurity Web Application Firewall (WAF)
+- OWASP Core Rule Set (CRS)
+- OWASP Juice Shop
+- Docker
+- nftables routing and NAT
+- WireGuard management VPN
+- Kali Linux attack workstation
+
+The objective is to create a realistic environment where attacks can be performed against an intentionally vulnerable application while defensive controls inspect, detect, log, and block malicious activity.
+
+---
+
+# Architecture
+
+```text
+                                      INTERNET
+                                          │
+                         ┌────────────────┴────────────────┐
+                         │                                 │
+                    Web Traffic                     WireGuard VPN
+                         │                                 │
+                         ▼                                 ▼
+              ┌──────────────────────┐          ┌────────────────┐
+              │         DMZ          │          │  Kali Linux    │
+              │   10.50.10.0/24     │          │ 10.50.30.2     │
+              │                      │          └───────┬────────┘
+              │ BLACKFORGE-DMZ-01    │                  │
+              │ 10.50.10.116         │◄─────────────────┘
+              │ Public: 13.229.212.104│        WireGuard
+              │                      │
+              │ ┌──────────────────┐ │
+              │ │ Nginx            │ │
+              │ │ ModSecurity      │ │
+              │ │ OWASP CRS        │ │
+              │ │ WireGuard        │ │
+              │ │ nftables         │ │
+              │ └────────┬─────────┘ │
+              └──────────┼───────────┘
+                         │
+                    NAT / Forwarding
+                         │
+                         ▼
+              ┌──────────────────────┐
+              │       PRIVATE        │
+              │   10.50.20.0/24      │
+              │                      │
+              │ BLACKFORGE-PRIVATE-01│
+              │ 10.50.20.32          │
+              │ No Public IP         │
+              │                      │
+              │ ┌──────────────────┐ │
+              │ │ Docker           │ │
+              │ │ OWASP Juice Shop │ │
+              │ │ :3000            │ │
+              │ └──────────────────┘ │
+              └──────────────────────┘
+```
+
+---
+
+# AWS Infrastructure
+
+## Region
+
+```text
+AWS Region: ap-southeast-1
+Location: Singapore
+```
 
 ## VPC
 
-| Component | Value |
+| Component | Configuration |
 |---|---|
-| Name | `BLACKFORGE-VPC` |
+| VPC | `BLACKFORGE-VPC` |
 | CIDR | `10.50.0.0/16` |
 | Region | `ap-southeast-1` |
+
+---
 
 ## Subnets
 
@@ -24,669 +99,727 @@
 ```text
 Name: BLACKFORGE-DMZ
 CIDR: 10.50.10.0/24
-Role: Public/edge network
-````
+```
+
+The DMZ contains the public-facing security infrastructure.
 
 ### Private
 
 ```text
 Name: BLACKFORGE-PRIVATE
 CIDR: 10.50.20.0/24
-Role: Internal workload network
 ```
 
-The private subnet has no direct Internet Gateway route.
+The private subnet contains the intentionally vulnerable application.
 
-## EC2 Instances
-
-### BLACKFORGE-DMZ-01
-
-```text
-Instance type: t3.micro
-Private IPv4: 10.50.10.116
-Public IPv4: 13.229.212.104
-Subnet: BLACKFORGE-DMZ
-```
-
-Role:
-
-* Public DMZ presence
-* Routing
-* NAT
-* Future reverse proxy
-* Future WAF
-
-### BLACKFORGE-PRIVATE-01
-
-```text
-Instance type: t3.micro
-Private IPv4: 10.50.20.32
-Public IPv4: NONE
-Subnet: BLACKFORGE-PRIVATE
-```
-
-Role:
-
-* Internal applications
-* OWASP Juice Shop
-* Backend services
-* Internal targets
-
-## Traffic Model
-
-```text
-Internet ──> DMZ                  Allowed as required
-DMZ ───────> Private              Controlled internal traffic
-Private ───> Internet             Through DMZ NAT
-Internet ──> Private              No direct public access
-```
-
-## Architecture
-
-```text
-                         INTERNET
-                            |
-                            v
-                +----------------------+
-                | BLACKFORGE-DMZ-01    |
-                | 10.50.10.116         |
-                | Public: 13.229.212.104
-                |                      |
-                | Routing + NAT        |
-                +----------+-----------+
-                           |
-                    BLACKFORGE-VPC
-                     10.50.0.0/16
-                           |
-                           v
-                +----------------------+
-                | BLACKFORGE-PRIVATE-01|
-                | 10.50.20.32          |
-                | NO PUBLIC IP          |
-                +----------------------+
-```
-
-````
+The private server has **no public IP address**.
 
 ---
 
-### `01-cloud-architecture/security-groups.md`
+# EC2 Instances
 
-```markdown
-# BLACKFORGE Security Groups
-
-## Purpose
-
-Security groups provide instance-level traffic filtering in addition to subnet and route-table segmentation.
-
-The goal is least-privilege access.
-
-## BLACKFORGE-DMZ-SG
+## BLACKFORGE-DMZ-01
 
 ```text
-Name: BLACKFORGE-DMZ-SG
-VPC: BLACKFORGE-VPC
-````
-
-The DMZ security group protects the public-facing edge instance.
-
-Current known inbound rule:
-
-```text
-TCP 80
-Source: 0.0.0.0/0
-Purpose: Public HTTP
+Private IP: 10.50.10.116
+Public IP:  13.229.212.104
+Subnet:     BLACKFORGE-DMZ
 ```
 
-Administrative access should not be unnecessarily exposed to the Internet.
+Responsibilities:
 
-Future management access will use WireGuard.
-
-## BLACKFORGE-PRIVATE-SG
-
-The private instance must remain inaccessible directly from the public Internet.
-
-Target policy:
-
-```text
-Inbound:
-- Required application traffic from DMZ
-- SSH through the management path
-- No unrestricted Internet inbound access
-```
-
-Outbound Internet access is provided through the DMZ/NAT path.
-
-## Validation
-
-* [x] Private instance has no public IPv4
-* [x] Private subnet does not directly use an Internet Gateway
-* [x] Private outbound access works through DMZ NAT
-* [ ] Verify Internet -> private host is blocked
-* [ ] Finalize private security-group rules
-* [ ] Restrict administrative access to WireGuard
-
-````
+- Nginx reverse proxy
+- ModSecurity WAF
+- OWASP CRS
+- WireGuard VPN server
+- IPv4 routing
+- nftables firewall
+- NAT gateway functionality
 
 ---
 
-### `03-networking/ip-addressing.md`
-
-```markdown
-# BLACKFORGE IP Addressing
-
-## VPC
+## BLACKFORGE-PRIVATE-01
 
 ```text
-BLACKFORGE-VPC
-10.50.0.0/16
-````
-
-## Subnet Allocation
-
-```text
-10.50.10.0/24    BLACKFORGE-DMZ
-10.50.20.0/24    BLACKFORGE-PRIVATE
+Private IP: 10.50.20.32
+Public IP:  None
+Subnet:     BLACKFORGE-PRIVATE
 ```
 
-## Hosts
+Responsibilities:
 
-### DMZ
-
-```text
-BLACKFORGE-DMZ-01
-10.50.10.116/24
-Public IPv4: 13.229.212.104
-```
-
-### Private
-
-```text
-BLACKFORGE-PRIVATE-01
-10.50.20.32/24
-Public IPv4: NONE
-```
-
-## Default Gateways
-
-DMZ:
-
-```text
-default via 10.50.10.1
-```
-
-Private:
-
-```text
-default via 10.50.20.1
-```
-
-## Why Separate Subnets?
-
-The DMZ and private networks use different CIDRs:
-
-```text
-DMZ     10.50.10.0/24
-PRIVATE 10.50.20.0/24
-```
-
-Traffic between them is routed at Layer 3.
-
-This allows route tables and security controls to define permitted traffic paths.
-
-## Validation
-
-Run:
-
-```bash
-ip -br addr
-ip route
-```
-
-on both hosts.
-
-Expected private address:
-
-```text
-10.50.20.32/24
-```
-
-The private instance has no public IPv4 address.
-
-````
+- Docker host
+- OWASP Juice Shop
+- Vulnerable application target
 
 ---
 
-### `03-networking/routing.md`
+# Network Routing
 
-```markdown
-# BLACKFORGE Routing
+The DMZ acts as a Linux router between the private subnet, Internet, and WireGuard management network.
 
-## BLACKFORGE-DMZ-RT
-
-Associated subnet:
+## Private → Internet
 
 ```text
-BLACKFORGE-DMZ
-10.50.10.0/24
-````
-
-Routes:
-
-```text
-10.50.0.0/16  -> local
-0.0.0.0/0     -> Internet Gateway
-```
-
-The DMZ therefore has Internet connectivity.
-
-## BLACKFORGE-PRIVATE-RT
-
-Associated subnet:
-
-```text
-BLACKFORGE-PRIVATE
-10.50.20.0/24
-```
-
-Routes:
-
-```text
-10.50.0.0/16  -> local
-0.0.0.0/0     -> BLACKFORGE-DMZ-01
-```
-
-The private subnet does not send its default route directly to the Internet Gateway.
-
-## Private Outbound Traffic
-
-```text
-PRIVATE EC2
+Private Server
 10.50.20.32
-      |
-      v
-PRIVATE-RT
-      |
-      v
-DMZ EC2
+      │
+      ▼
+DMZ
 10.50.10.116
-      |
-      v
-nftables NAT
-      |
-      v
-Internet Gateway
-      |
-      v
+      │
+      │ NAT
+      ▼
 Internet
 ```
 
-## Linux IP Forwarding
+The private server can access the Internet without having a public IP.
 
-On the DMZ host:
+This was verified using:
 
 ```bash
-sysctl net.ipv4.ip_forward
+curl -4 https://ifconfig.me
 ```
 
-Result:
+The observed public address was the DMZ public IP.
 
-```text
-net.ipv4.ip_forward = 1
-```
+---
 
-Persistent configuration:
+# IPv4 Forwarding
 
-```text
-/etc/sysctl.d/99-blackforge-router.conf
-```
-
-Contents:
+Linux IPv4 forwarding is enabled on the DMZ:
 
 ```text
 net.ipv4.ip_forward=1
 ```
 
-Applied with:
-
-```bash
-sudo sysctl --system
-```
-
-## EC2 Source/Destination Check
-
-Source/destination checking was disabled on:
-
-```text
-BLACKFORGE-DMZ-01
-```
-
-This allows the instance to forward traffic for the private host.
-
-## NAT
-
-The DMZ uses nftables masquerading for:
-
-```text
-10.50.20.0/24
-```
-
-The private host's outbound traffic is translated through the DMZ public IP.
-
-## Verification
-
-From the private host:
-
-```bash
-curl -4 https://ifconfig.me
-```
-
-Observed:
-
-```text
-13.229.212.104
-```
-
-Therefore:
-
-```text
-PRIVATE -> DMZ -> NAT -> INTERNET
-```
-
-is working.
-
-````
-
----
-
-### `notes/lab-journal/2026-09-05-segmentation-baseline.md`
-
-```markdown
-# BLACKFORGE — Segmentation Baseline
-
-## Date
-
-2026-09-05
-
-## Phase
-
-BLACKFORGE Cloud Architecture — Network Segmentation
-
-## Objective
-
-Build a VPC architecture with a public DMZ subnet and an isolated private subnet.
-
-The private host must have no public IPv4 address while retaining controlled outbound Internet access.
-
-## Environment
-
-### AWS
-
-```text
-Region: ap-southeast-1
-VPC: BLACKFORGE-VPC
-CIDR: 10.50.0.0/16
-````
-
-### DMZ
-
-```text
-BLACKFORGE-DMZ
-10.50.10.0/24
-
-BLACKFORGE-DMZ-01
-Private: 10.50.10.116
-Public: 13.229.212.104
-```
-
-### Private
-
-```text
-BLACKFORGE-PRIVATE
-10.50.20.0/24
-
-BLACKFORGE-PRIVATE-01
-Private: 10.50.20.32
-Public: NONE
-```
-
-## Initial State
-
-The previous Lightsail environment had both servers in the same private address space.
-
-Testing showed direct private connectivity.
-
-That environment was useful as a baseline but did not provide the desired DMZ/private subnet architecture.
-
-BLACKFORGE was therefore rebuilt using an Amazon VPC with separate subnets.
-
-## Architecture
-
-```text
-                         INTERNET
-                            |
-                            v
-                  +-------------------+
-                  |       DMZ         |
-                  | 10.50.10.0/24     |
-                  |                   |
-                  | BLACKFORGE-DMZ-01 |
-                  | 10.50.10.116      |
-                  +---------+---------+
-                            |
-                       VPC routing
-                            |
-                  +---------v---------+
-                  |      PRIVATE      |
-                  | 10.50.20.0/24     |
-                  |                   |
-                  | BLACKFORGE-       |
-                  | PRIVATE-01        |
-                  | 10.50.20.32       |
-                  | NO PUBLIC IP       |
-                  +-------------------+
-```
-
-## Routing
-
-DMZ:
-
-```text
-10.50.0.0/16 -> local
-0.0.0.0/0    -> Internet Gateway
-```
-
-Private:
-
-```text
-10.50.0.0/16 -> local
-0.0.0.0/0    -> BLACKFORGE-DMZ-01
-```
-
-## IP Forwarding
-
-Enabled on DMZ:
-
-```bash
-sysctl net.ipv4.ip_forward
-```
-
-Result:
-
-```text
-net.ipv4.ip_forward = 1
-```
-
 Persistent configuration:
 
 ```text
 /etc/sysctl.d/99-blackforge-router.conf
 ```
 
-## nftables NAT
-
-The DMZ host was configured with a dedicated nftables table.
-
-Relevant configuration:
-
-```text
-table ip blackforge {
-        chain forward {
-                type filter hook forward priority filter; policy drop;
-                iifname "ens5" oifname "ens5" ip saddr 10.50.20.0/24 ct state established,related,new accept
-                iifname "ens5" oifname "ens5" ip daddr 10.50.20.0/24 ct state established,related accept
-        }
-
-        chain postrouting {
-                type nat hook postrouting priority srcnat; policy accept;
-                ip saddr 10.50.20.0/24 oifname "ens5" masquerade
-        }
-}
-```
-
-## Source/Destination Check
-
-Disabled on:
-
-```text
-BLACKFORGE-DMZ-01
-```
-
-This permits the DMZ instance to forward packets for the private host.
-
-## Testing
-
-### Before NAT
-
-From the private host:
+Verification:
 
 ```bash
-curl -4 --connect-timeout 5 https://example.com
+sysctl net.ipv4.ip_forward
+```
+
+Expected:
+
+```text
+net.ipv4.ip_forward = 1
+```
+
+---
+
+# nftables
+
+The DMZ uses **nftables** for packet forwarding and NAT.
+
+The forwarding chain uses a default-drop policy:
+
+```text
+policy drop
+```
+
+This provides a default-deny forwarding model.
+
+## Private subnet NAT
+
+```text
+10.50.20.0/24 → Internet
+```
+
+## WireGuard VPN NAT
+
+```text
+10.50.30.0/24 → 10.50.20.0/24
+```
+
+Relevant rules:
+
+```text
+ip saddr 10.50.20.0/24 oifname "ens5" masquerade
+
+ip saddr 10.50.30.0/24 \
+ip daddr 10.50.20.0/24 \
+oifname "ens5" masquerade
+```
+
+Persistent configuration:
+
+```text
+/etc/nftables.conf
+```
+
+The nftables service is enabled at boot.
+
+---
+
+# Application Layer
+
+## OWASP Juice Shop
+
+The private server runs OWASP Juice Shop using Docker.
+
+Container:
+
+```text
+juice-shop
+```
+
+Port:
+
+```text
+3000
+```
+
+Internal application endpoint:
+
+```text
+10.50.20.32:3000
+```
+
+The application is intentionally vulnerable and is used as the primary attack target.
+
+---
+
+# Docker
+
+Juice Shop runs inside a Docker container:
+
+```bash
+docker run -d \
+  --name juice-shop \
+  -p 3000:3000 \
+  bkimminich/juice-shop
+```
+
+The application is not directly exposed to the Internet.
+
+---
+
+# Nginx Reverse Proxy
+
+Nginx runs on the DMZ server.
+
+Its role is to provide a controlled public entry point to the private application.
+
+Traffic flow:
+
+```text
+Internet
+    │
+    ▼
+13.229.212.104:80
+    │
+    ▼
+Nginx
+    │
+    ▼
+10.50.20.32:3000
+    │
+    ▼
+OWASP Juice Shop
+```
+
+Nginx forwards requests using:
+
+```nginx
+proxy_pass http://10.50.20.32:3000;
+```
+
+Important proxy headers include:
+
+```nginx
+proxy_set_header Host $host;
+proxy_set_header X-Real-IP $remote_addr;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header X-Forwarded-Proto $scheme;
+```
+
+This allows the reverse proxy to preserve useful client/request information for downstream logging and application behavior.
+
+---
+
+# Web Application Firewall
+
+## ModSecurity
+
+ModSecurity provides the WAF (Web Application Firewall) functionality.
+
+It is integrated with Nginx and inspects incoming HTTP requests before they reach Juice Shop.
+
+Current configuration:
+
+```text
+/etc/nginx/modsecurity.conf
+```
+
+ModSecurity is enabled with:
+
+```text
+SecRuleEngine On
+```
+
+Audit logging is enabled:
+
+```text
+SecAuditEngine RelevantOnly
+SecAuditLog /var/log/nginx/modsec_audit.log
+```
+
+---
+
+# OWASP Core Rule Set
+
+OWASP CRS (Core Rule Set) provides the detection rules used by ModSecurity.
+
+The environment includes rules for attack categories including:
+
+- SQL Injection (SQLi)
+- Cross-Site Scripting (XSS)
+- Remote Code Execution (RCE)
+- Local File Inclusion (LFI)
+- Remote File Inclusion (RFI)
+- Protocol attacks
+- Session fixation
+- Application-layer attacks
+
+The Nginx-compatible CRS loader is:
+
+```text
+/etc/nginx/crs-blackforge.conf
+```
+
+It loads:
+
+```text
+/etc/modsecurity/crs/crs-setup.conf
+/etc/modsecurity/crs/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf
+/usr/share/modsecurity-crs/rules/*.conf
+/etc/modsecurity/crs/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf
+```
+
+---
+
+# WAF Verification
+
+A controlled SQL Injection test was performed against the Juice Shop API:
+
+```bash
+curl -i "http://13.229.212.104/rest/products/search?q=%27%20OR%201%3D1--"
+```
+
+ModSecurity detected the request using:
+
+```text
+Rule ID: 942100
+SQL Injection Attack Detected via libinjection
+```
+
+The request was subsequently blocked:
+
+```text
+HTTP/1.1 403 Forbidden
+```
+
+The audit log also recorded:
+
+```text
+942100 SQL Injection Attack Detected via libinjection
+949110 Inbound Anomaly Score Exceeded
+```
+
+This confirmed that the WAF is actively inspecting and blocking malicious requests.
+
+---
+
+# CRS False Positive Handling
+
+A normal request using the public IP as the HTTP Host header triggered:
+
+```text
+920350
+Host header is a numeric IP address
+```
+
+Because this was expected behavior for the BLACKFORGE lab, a targeted exclusion was created.
+
+```apache
+SecRule REQUEST_HEADERS:Host "@streq 13.229.212.104" \
+    "id:1001,\
+    phase:1,\
+    pass,\
+    nolog,\
+    ctl:ruleRemoveById=920350"
+```
+
+The exclusion is intentionally narrow and only removes rule `920350` when the Host header matches the BLACKFORGE public IP.
+
+SQL Injection protection remained active after the exclusion.
+
+Verification demonstrated:
+
+```text
+920350 → excluded
+942100 → detected
+949110 → blocked
+```
+
+This demonstrates controlled WAF tuning rather than disabling broad categories of protection.
+
+---
+
+# WireGuard Management VPN
+
+BLACKFORGE uses WireGuard as a dedicated management network.
+
+```text
+VPN Network: 10.50.30.0/24
+```
+
+Endpoints:
+
+```text
+DMZ:  10.50.30.1
+Kali: 10.50.30.2
+```
+
+WireGuard listens on:
+
+```text
+UDP 51820
+```
+
+Architecture:
+
+```text
+Kali
+10.50.30.2
+    │
+    │ WireGuard
+    ▼
+DMZ
+10.50.30.1
+    │
+    │ NAT
+    ▼
+Private
+10.50.20.32
+```
+
+---
+
+# Administrative Access
+
+Administrative SSH (Secure Shell) access is performed through the WireGuard management network.
+
+Kali SSH configuration:
+
+```sshconfig
+Host server1
+    HostName 10.50.30.1
+    User ubuntu
+    IdentityFile ~/.ssh/BLACKFORGE-KEY.pem
+    IdentitiesOnly yes
+
+Host server2
+    HostName 10.50.20.32
+    User ubuntu
+    IdentityFile ~/.ssh/BLACKFORGE-KEY.pem
+    IdentitiesOnly yes
+    ProxyJump server1
+```
+
+This creates:
+
+```text
+Kali
+ │
+ │ WireGuard
+ ▼
+DMZ
+ │
+ │ SSH ProxyJump
+ ▼
+Private Server
+```
+
+The private server does not require a public IP.
+
+---
+
+# SSH Connectivity Verification
+
+WireGuard connectivity was verified using:
+
+```bash
+sudo wg show
+```
+
+Kali successfully established a WireGuard handshake with the DMZ.
+
+The private SSH service was independently verified:
+
+```bash
+nc -vz -w 5 10.50.20.32 22
 ```
 
 Result:
 
 ```text
-Connection timed out
+10.50.20.32:22 open
 ```
 
-This demonstrated that the private host initially had no working Internet egress.
-
-### After NAT
-
-From the private host:
-
-```bash
-curl -4 https://ifconfig.me
-```
-
-Result:
-
-```text
-13.229.212.104
-```
-
-This proves private outbound traffic is being NATed through the DMZ.
-
-## SSH Management
-
-Kali uses:
+End-to-end SSH access was verified using:
 
 ```bash
 ssh server1
 ```
 
-for the DMZ.
+and:
 
 ```bash
 ssh server2
 ```
 
-for the private host through `ProxyJump`.
+---
 
-Conceptually:
+# Why Ping to the Private Server Fails
+
+ICMP (Internet Control Message Protocol) ping to the private server does not receive a response:
+
+```bash
+ping 10.50.20.32
+```
+
+This does not indicate that the VPN or routing path is broken.
+
+The Private Security Group allows the required TCP (Transmission Control Protocol) SSH service on port 22, while ICMP echo traffic is not permitted.
+
+TCP connectivity was successfully verified:
+
+```text
+TCP/22 → OPEN
+SSH     → WORKING
+ICMP    → BLOCKED
+```
+
+This demonstrates an important defensive networking principle:
+
+> A failed ping does not necessarily mean a host or service is unreachable. Test the specific protocol and port required by the service.
+
+---
+
+# WireGuard Persistence
+
+WireGuard is managed using:
+
+```text
+wg-quick@wg0.service
+```
+
+The service is enabled at boot:
+
+```bash
+sudo systemctl enable wg-quick@wg0
+```
+
+Expected state:
+
+```text
+Loaded:  loaded; enabled
+Active:  active (exited)
+```
+
+This ensures that the DMZ recreates the WireGuard interface after reboot.
+
+---
+
+# WireGuard Failure Recovery
+
+A watchdog was implemented on the DMZ to detect when the WireGuard interface is missing.
+
+Recovery flow:
+
+```text
+wg0 accidentally DOWN
+        │
+        ▼
+Watchdog detects missing interface
+        │
+        ▼
+Restart wg-quick@wg0
+        │
+        ▼
+wg0 recreated
+        │
+        ▼
+WireGuard handshake restored
+        │
+        ▼
+Kali management access restored
+```
+
+The failure scenario was deliberately tested by taking `wg0` down.
+
+The watchdog successfully restored the interface and management connectivity.
+
+This provides protection against accidental manual removal of the WireGuard interface.
+
+---
+
+# Security Groups
+
+The AWS Security Group architecture follows the principle of minimizing unnecessary public exposure.
+
+The DMZ provides the public-facing application entry point.
+
+The private server does not have a public IP.
+
+Administrative SSH access is intended to occur through the WireGuard management network rather than direct public exposure.
+
+WireGuard uses:
+
+```text
+UDP 51820
+```
+
+as its public VPN entry point.
+
+---
+
+# Management Model
+
+BLACKFORGE separates:
+
+### Application traffic
+
+```text
+Internet
+   ↓
+Nginx
+   ↓
+ModSecurity
+   ↓
+OWASP CRS
+   ↓
+Juice Shop
+```
+
+### Administrative traffic
 
 ```text
 Kali
- |
- +--> server1 -> DMZ
- |
- +--> server2 -> server1 -> PRIVATE
+   ↓
+WireGuard
+   ↓
+DMZ
+   ↓
+SSH
+   ↓
+Private Server
 ```
 
-## Technical Understanding
+This separation prevents normal administrative access from being dependent on the public application interface.
 
-### Subnet isolation
+---
+
+# Verification Matrix
+
+| Component | Verification | Status |
+|---|---|---:|
+| AWS VPC | AWS Console | ✅ |
+| DMZ subnet | AWS Console | ✅ |
+| Private subnet | AWS Console | ✅ |
+| Private server public IP | None | ✅ |
+| DMZ routing | `ip route` | ✅ |
+| IPv4 forwarding | `sysctl` | ✅ |
+| Private → Internet NAT | `curl ifconfig.me` | ✅ |
+| nftables | `nft list ruleset` | ✅ |
+| nftables persistence | systemd | ✅ |
+| Nginx | HTTP request | ✅ |
+| Reverse proxy | Public → Juice Shop | ✅ |
+| ModSecurity | WAF test | ✅ |
+| OWASP CRS | Rule loading | ✅ |
+| SQL Injection detection | CRS 942100 | ✅ |
+| SQL Injection blocking | HTTP 403 | ✅ |
+| CRS exclusion | Rule 920350 | ✅ |
+| WireGuard | `wg show` | ✅ |
+| WireGuard handshake | Peer status | ✅ |
+| Kali → DMZ | VPN | ✅ |
+| Kali → Private | TCP/22 | ✅ |
+| SSH server1 | SSH | ✅ |
+| SSH server2 | ProxyJump | ✅ |
+| WireGuard boot persistence | systemd | ✅ |
+| WireGuard recovery | Failure test | ✅ |
+
+---
+
+# Current Infrastructure Status
+
+| Component | Status |
+|---|---:|
+| AWS Infrastructure | ✅ COMPLETE |
+| Network Segmentation | ✅ COMPLETE |
+| DMZ | ✅ COMPLETE |
+| Private Application Network | ✅ COMPLETE |
+| Nginx Reverse Proxy | ✅ COMPLETE |
+| ModSecurity WAF | ✅ COMPLETE |
+| OWASP CRS | ✅ COMPLETE |
+| Docker / Juice Shop | ✅ COMPLETE |
+| nftables Firewall | ✅ COMPLETE |
+| NAT | ✅ COMPLETE |
+| WireGuard VPN | ✅ COMPLETE |
+| SSH Management Path | ✅ COMPLETE |
+| Boot Persistence | ✅ COMPLETE |
+| WireGuard Recovery | ✅ COMPLETE |
+| Infrastructure Verification | ✅ COMPLETE |
+
+
+# Infrastructure Milestone
+
+The BLACKFORGE infrastructure phase is complete.
+
+The environment is now ready for controlled offensive security exercises.
+
+The next phase is:
 
 ```text
-DMZ     10.50.10.0/24
-PRIVATE 10.50.20.0/24
-```
-
-are separate routed networks.
-
-### Routing
-
-The private subnet sends its default traffic toward the DMZ instead of directly to the Internet Gateway.
-
-### IP forwarding
-
-The DMZ Linux kernel forwards packets between the private workload and external network.
-
-### NAT
-
-Masquerading changes the source address of private outbound traffic so external services see the DMZ public IP.
-
-## Security Perspective
-
-### Red Team
-
-The DMZ represents the intended exposed attack surface.
-
-A later compromise of an exposed service will be used to study movement toward the private application.
-
-### Blue Team
-
-The private subnet creates a separate location for internal workloads and monitoring.
-
-### Purple Team
-
-Later testing will validate whether movement from the DMZ toward private assets can be detected and controlled.
-
-## Evidence
-
-* VPC/subnet screenshots
-* EC2 instance details
-* Route-table screenshots
-* `ip -br addr`
-* `ip route`
-* nftables ruleset
-* NAT verification
-* SSH ProxyJump verification
-
-## Status
-
-* [x] VPC created
-* [x] DMZ subnet created
-* [x] Private subnet created
-* [x] DMZ route table configured
-* [x] Private route table configured
-* [x] DMZ EC2 deployed
-* [x] Private EC2 deployed
-* [x] Private EC2 has no public IP
-* [x] SSH aliases configured
-* [x] SSH ProxyJump working
-* [x] IPv4 forwarding enabled
-* [x] nftables NAT configured
-* [x] Source/destination check disabled
-* [x] Private outbound Internet verified
-* [ ] Final private security-group policy
-* [ ] Verify Internet -> private is blocked
-* [ ] WireGuard management plane
-* [ ] Docker/Juice Shop
-* [ ] Nginx/ModSecurity
-
-```
-
-**These are the files/locations to maintain. No new folder structure.**
+┌──────────────────────┐
+│   INFRASTRUCTURE     │
+│      COMPLETE        │
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│  RECONNAISSANCE      │
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│   ATTACK SIMULATION  │
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│      DETECTION       │
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│    INVESTIGATION     │
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│      RESPONSE        │
+└──────────┬───────────┘
+           │
+           ▼
+┌──────────────────────┐
+│      HARDENING       │
+└──────────────────────┘
 ```
