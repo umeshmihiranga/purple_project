@@ -1,0 +1,12 @@
+# Project State Tracking (Local only)
+PROJECT_STATE.md
+.project_state.md
+project_state.md
+
+# OS / Editor artifacts
+.DS_Store
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
